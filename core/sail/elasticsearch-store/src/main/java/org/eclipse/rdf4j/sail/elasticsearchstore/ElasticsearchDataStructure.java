@@ -270,6 +270,15 @@ class ElasticsearchDataStructure implements DataStructureInterface {
 			} else if (object instanceof BNode) {
 				bool.must(term("object_BNode", true));
 			} else {
+				boolQueryBuilder.must(
+						QueryBuilders.termQuery("object_Datatype", ((Literal) object).getDatatype().stringValue()));
+				if (((Literal) object).getLanguage().isPresent()) {
+					boolQueryBuilder
+							.must(QueryBuilders.termQuery("object_Lang", ((Literal) object).getLanguage().get()));
+					boolQueryBuilder
+							.must(QueryBuilders.termQuery("object_LangDir",
+									((Literal) object).getBaseDirection().toString()));
+				}
 				bool.must(term("object_Datatype", ((Literal) object).getDatatype().stringValue()));
 				((Literal) object).getLanguage()
 						.ifPresent(lang -> bool.must(term("object_Lang", lang)));
@@ -501,7 +510,7 @@ class ElasticsearchDataStructure implements DataStructureInterface {
 					((Literal) statement.getObject()).getDatatype().stringValue());
 			if (((Literal) statement.getObject()).getLanguage().isPresent()) {
 				jsonMap.put("object_Lang", ((Literal) statement.getObject()).getLanguage().get());
-
+				jsonMap.put("object_LangDir", ((Literal) statement.getObject()).getBaseDirection().toString());
 			}
 		}
 		return jsonMap;
@@ -739,8 +748,8 @@ class ElasticsearchDataStructure implements DataStructureInterface {
 			objectRes = vf.createBNode(objectString);
 		} else {
 			if (sourceAsMap.containsKey("object_Lang")) {
-				objectRes = vf.createLiteral(objectString, (String) sourceAsMap.get("object_Lang"));
-
+				objectRes = vf.createLiteral(objectString, (String) sourceAsMap.get("object_Lang"),
+						Literal.BaseDirection.fromString((String) sourceAsMap.get("object_LangDir")));
 			} else {
 				objectRes = vf.createLiteral(objectString,
 						vf.createIRI((String) sourceAsMap.get("object_Datatype")));
