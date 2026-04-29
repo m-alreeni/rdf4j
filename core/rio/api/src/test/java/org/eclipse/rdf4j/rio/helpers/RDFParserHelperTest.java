@@ -118,9 +118,9 @@ public class RDFParserHelperTest {
 	}
 
 	/**
-	 * Test method for
-	 * {@link org.eclipse.rdf4j.rio.helpers.RDFParserHelper#createLiteral(java.lang.String, java.lang.String, org.eclipse.rdf4j.model.URI, org.eclipse.rdf4j.rio.ParserConfig, org.eclipse.rdf4j.rio.ParseErrorListener, org.eclipse.rdf4j.model.ValueFactory)}
-	 * .
+	 * Test method for {@link org.eclipse.rdf4j.rio.helpers.RDFParserHelp+er#createLiteral(java.lang.String,
+	 * java.lang.String, org.eclipse.rdf4j.model.URI, org.eclipse.rdf4j.rio.ParserConfig,
+	 * org.eclipse.rdf4j.rio.ParseErrorListener, org.eclipse.rdf4j.model.ValueFactory)} .
 	 */
 	@Test
 	public final void testCreateLiteralLabelAndLanguageAndDirection() {
@@ -205,7 +205,7 @@ public class RDFParserHelperTest {
 		assertTrue(parserConfig.get(BasicParserSettings.VERIFY_DATATYPE_VALUES));
 		assertThatThrownBy(() -> RDFParserHelper.createLiteral(LABEL_TESTA, null, RDF.DIRLANGSTRING, parserConfig,
 				errListener, valueFactory))
-				.isInstanceOf(RDFParseException.class);
+						.isInstanceOf(RDFParseException.class);
 	}
 
 	@Test

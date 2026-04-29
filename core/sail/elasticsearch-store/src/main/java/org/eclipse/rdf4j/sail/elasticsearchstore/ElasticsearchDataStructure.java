@@ -48,11 +48,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import co.elastic.clients.elasticsearch._types.Conflicts;
 import co.elastic.clients.elasticsearch._types.FieldValue;
-import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
-import co.elastic.clients.elasticsearch._types.query_dsl.ConstantScoreQuery;
-import co.elastic.clients.elasticsearch._types.query_dsl.ExistsQuery;
-import co.elastic.clients.elasticsearch._types.query_dsl.Query;
-import co.elastic.clients.elasticsearch._types.query_dsl.TermQuery;
+import co.elastic.clients.elasticsearch._types.query_dsl.*;
 import co.elastic.clients.elasticsearch.core.BulkResponse;
 import co.elastic.clients.elasticsearch.core.DeleteByQueryResponse;
 import co.elastic.clients.elasticsearch.core.GetResponse;
@@ -270,18 +266,15 @@ class ElasticsearchDataStructure implements DataStructureInterface {
 			} else if (object instanceof BNode) {
 				bool.must(term("object_BNode", true));
 			} else {
-				boolQueryBuilder.must(
-						QueryBuilders.termQuery("object_Datatype", ((Literal) object).getDatatype().stringValue()));
+				bool.must(
+						term("object_Datatype", ((Literal) object).getDatatype().stringValue()));
 				if (((Literal) object).getLanguage().isPresent()) {
-					boolQueryBuilder
-							.must(QueryBuilders.termQuery("object_Lang", ((Literal) object).getLanguage().get()));
-					boolQueryBuilder
-							.must(QueryBuilders.termQuery("object_LangDir",
+					bool
+							.must(term("object_Lang", ((Literal) object).getLanguage().get()));
+					bool
+							.must(term("object_LangDir",
 									((Literal) object).getBaseDirection().toString()));
 				}
-				bool.must(term("object_Datatype", ((Literal) object).getDatatype().stringValue()));
-				((Literal) object).getLanguage()
-						.ifPresent(lang -> bool.must(term("object_Lang", lang)));
 			}
 		}
 

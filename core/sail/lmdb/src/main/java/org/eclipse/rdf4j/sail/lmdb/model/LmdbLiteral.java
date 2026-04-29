@@ -12,7 +12,6 @@
 package org.eclipse.rdf4j.sail.lmdb.model;
 
 import java.io.ObjectStreamException;
-import java.util.Objects;
 import java.util.Optional;
 
 import org.eclipse.rdf4j.model.IRI;
@@ -94,8 +93,9 @@ public class LmdbLiteral extends AbstractLiteral implements LmdbValue {
 
 	public LmdbLiteral(ValueStoreRevision revision, String label, String language, BaseDirection baseDirection,
 			long internalID) {
-		Objects.requireNonNull(language, "null language");
-		Objects.requireNonNull(baseDirection, "null baseDirection");
+		assert language != null;
+		assert baseDirection != null;
+		assert label != null;
 		this.label = label;
 		this.language = language;
 		this.baseDirection = baseDirection;

@@ -21,6 +21,7 @@ import org.eclipse.rdf4j.model.vocabulary.RDF;
 import org.eclipse.rdf4j.testsuite.model.ModelTest;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 public class SailSourceModelTest extends ModelTest {
 
@@ -33,6 +34,7 @@ public class SailSourceModelTest extends ModelTest {
 	}
 
 	@Test
+	@Timeout(2000)
 	public void testRemoveTermIteration() {
 		SailSourceModel sailSourceModel = getNewModel();
 		sailSourceModel.add(RDF.TYPE, RDF.TYPE, RDF.TYPE);
