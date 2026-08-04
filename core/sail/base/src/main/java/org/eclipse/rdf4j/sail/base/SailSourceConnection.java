@@ -481,6 +481,15 @@ public abstract class SailSourceConnection extends AbstractNotifyingSailConnecti
 	}
 
 	@Override
+	public Set<StatementOrder> getSupportedOrders(Resource subj, IRI pred, Value obj, Resource... contexts) {
+		try (SailSource branch = branch(IncludeInferred.fromBoolean(false))) {
+			try (SailDataset snapshot = branch.dataset(getIsolationLevel())) {
+				return snapshot.getSupportedOrders(subj, pred, obj, contexts);
+			}
+		}
+	}
+
+	@Override
 	protected long sizeInternal(Resource... contexts) throws SailException {
 		try (Stream<? extends Statement> stream = getStatementsInternal(null, null, null, false, contexts).stream()) {
 			return stream.count();

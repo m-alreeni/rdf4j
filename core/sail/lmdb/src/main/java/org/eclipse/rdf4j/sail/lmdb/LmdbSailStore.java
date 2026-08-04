@@ -38,6 +38,7 @@ import java.util.function.Function;
 
 import org.eclipse.rdf4j.common.iteration.CloseableIteration;
 import org.eclipse.rdf4j.common.iteration.CloseableIteratorIteration;
+import org.eclipse.rdf4j.common.iteration.DualUnionIteration;
 import org.eclipse.rdf4j.common.iteration.EmptyIteration;
 import org.eclipse.rdf4j.common.iteration.UnionIteration;
 import org.eclipse.rdf4j.common.order.StatementOrder;
@@ -53,6 +54,7 @@ import org.eclipse.rdf4j.query.algebra.evaluation.impl.EvaluationStatistics;
 import org.eclipse.rdf4j.query.algebra.evaluation.sketch.SketchBasedJoinEstimator;
 import org.eclipse.rdf4j.query.algebra.evaluation.sketch.SketchStatementSource;
 import org.eclipse.rdf4j.query.algebra.evaluation.sketch.SketchStatementSourceException;
+import org.eclipse.rdf4j.query.algebra.evaluation.util.ValueComparator;
 import org.eclipse.rdf4j.sail.InterruptedSailException;
 import org.eclipse.rdf4j.sail.SailException;
 import org.eclipse.rdf4j.sail.base.BackingSailSource;
@@ -78,6 +80,7 @@ class LmdbSailStore implements SailStore {
 	private final TripleStore tripleStore;
 
 	private final ValueStore valueStore;
+	private final Comparator<Value> valueIdComparator;
 	private final int bulkOperationSize;
 
 	private final ExecutorService tripleStoreExecutor = createTripleStoreExecutor();
@@ -320,6 +323,7 @@ class LmdbSailStore implements SailStore {
 			namespaceStore = new NamespaceStore(dataDir);
 			var valueStore = new ValueStore(new File(dataDir, "values"), properties, config);
 			this.valueStore = valueStore;
+			this.valueIdComparator = new LmdbValueIdComparator(valueStore, new ValueComparator());
 			tripleStore = new TripleStore(new File(dataDir, "triples"), properties, config, valueStore);
 			statementPatternCardinalitySource = new LmdbStatementPatternCardinalitySource(valueStore, tripleStore);
 			mayHaveInferred = tripleStore.hasTriples(false);
@@ -774,6 +778,73 @@ class LmdbSailStore implements SailStore {
 		} else {
 			return new UnionIteration<>(perContextIterList);
 		}
+	}
+
+	CloseableIteration<? extends Statement> createStatementIterator(Txn txn, StatementOrder statementOrder,
+			Resource subj, IRI pred, Value obj, boolean explicit, Resource... contexts) throws IOException {
+		if (!explicit && !mayHaveInferred) {
+			return CloseableIteration.EMPTY_STATEMENT_ITERATION;
+		}
+		long subjID = LmdbValue.UNKNOWN_ID;
+		if (subj != null) {
+			subjID = valueStore.getId(subj);
+			if (subjID == LmdbValue.UNKNOWN_ID) {
+				return CloseableIteration.EMPTY_STATEMENT_ITERATION;
+			}
+		}
+
+		long predID = LmdbValue.UNKNOWN_ID;
+		if (pred != null) {
+			predID = valueStore.getId(pred);
+			if (predID == LmdbValue.UNKNOWN_ID) {
+				return CloseableIteration.EMPTY_STATEMENT_ITERATION;
+			}
+		}
+
+		long objID = LmdbValue.UNKNOWN_ID;
+		if (obj != null) {
+			objID = valueStore.getId(obj);
+			if (objID == LmdbValue.UNKNOWN_ID) {
+				return CloseableIteration.EMPTY_STATEMENT_ITERATION;
+			}
+		}
+
+		List<Long> contextIDList = new ArrayList<>(contexts.length);
+		if (contexts.length == 0) {
+			contextIDList.add(LmdbValue.UNKNOWN_ID);
+		} else {
+			for (Resource context : contexts) {
+				if (context == null) {
+					contextIDList.add(0L);
+				} else if (!context.isTripleTerm()) {
+					long contextID = valueStore.getId(context);
+					if (contextID != LmdbValue.UNKNOWN_ID) {
+						contextIDList.add(contextID);
+					}
+				}
+			}
+		}
+
+		ArrayList<LmdbStatementIterator> perContextIterList = new ArrayList<>(contextIDList.size());
+		for (long contextID : contextIDList) {
+			RecordIterator records = tripleStore.getTriples(txn, subjID, predID, objID, contextID, explicit,
+					statementOrder);
+			perContextIterList.add(new LmdbStatementIterator(records, valueStore));
+		}
+
+		if (perContextIterList.isEmpty()) {
+			return CloseableIteration.EMPTY_STATEMENT_ITERATION;
+		}
+		if (perContextIterList.size() == 1) {
+			return perContextIterList.getFirst();
+		}
+
+		Comparator<Statement> statementComparator = statementOrder.getComparator(valueIdComparator);
+		CloseableIteration<? extends Statement> merged = perContextIterList.getFirst();
+		for (int i = 1; i < perContextIterList.size(); i++) {
+			merged = DualUnionIteration.getWildcardInstance(statementComparator, merged, perContextIterList.get(i));
+		}
+		return merged;
 	}
 
 	long countStatementIterator(
@@ -1678,12 +1749,25 @@ class LmdbSailStore implements SailStore {
 		@Override
 		public CloseableIteration<? extends Statement> getStatements(StatementOrder statementOrder, Resource subj,
 				IRI pred, Value obj, Resource... contexts) throws SailException {
-			throw new UnsupportedOperationException("Not implemented yet");
+			if (!tripleStore.getSupportedOrders().contains(statementOrder)) {
+				throw new SailException("Statement order not supported: " + statementOrder);
+			}
+			try {
+				return createStatementIterator(txn, statementOrder, subj, pred, obj, explicit, contexts);
+			} catch (IOException e) {
+				try {
+					logger.warn("Failed to get ordered statements, retrying", e);
+					Thread.yield();
+					return createStatementIterator(txn, statementOrder, subj, pred, obj, explicit, contexts);
+				} catch (IOException e2) {
+					throw new SailException("Unable to get ordered statements", e);
+				}
+			}
 		}
 
 		@Override
 		public Set<StatementOrder> getSupportedOrders(Resource subj, IRI pred, Value obj, Resource... contexts) {
-			return Set.of();
+			return tripleStore.getSupportedOrders();
 		}
 
 		@Override
@@ -1698,7 +1782,7 @@ class LmdbSailStore implements SailStore {
 
 		@Override
 		public Comparator<Value> getComparator() {
-			return null;
+			return valueIdComparator;
 		}
 	}
 }

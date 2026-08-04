@@ -78,6 +78,7 @@ import org.eclipse.collections.api.iterator.LongIterator;
 import org.eclipse.collections.impl.map.mutable.primitive.LongIntHashMap;
 import org.eclipse.rdf4j.common.annotation.Experimental;
 import org.eclipse.rdf4j.common.concurrent.locks.StampedLongAdderLockManager;
+import org.eclipse.rdf4j.common.order.StatementOrder;
 import org.eclipse.rdf4j.query.algebra.evaluation.sketch.SketchBasedJoinEstimator.Component;
 import org.eclipse.rdf4j.sail.SailException;
 import org.eclipse.rdf4j.sail.lmdb.TripleIndex.StatementFieldValueAccessor;
@@ -481,6 +482,42 @@ class TripleStore implements Closeable {
 		return getTriplesUsingIndex(txn, subj, pred, obj, context, explicit, index, doRangeSearch);
 	}
 
+	public RecordIterator getTriples(Txn txn, long subj, long pred, long obj, long context, boolean explicit,
+			StatementOrder statementOrder) throws IOException {
+		TripleIndex index = getBestIndexForOrder(statementOrder, subj, pred, obj, context);
+		if (index == null) {
+			throw new IllegalArgumentException("Unsupported statement order: " + statementOrder);
+		}
+		boolean doRangeSearch = index.getPatternScore(subj, pred, obj, context) > 0;
+		return getTriplesUsingIndex(txn, subj, pred, obj, context, explicit, index, doRangeSearch);
+	}
+
+	public Set<StatementOrder> getSupportedOrders() {
+		Set<StatementOrder> supportedOrders = new HashSet<>(4);
+		for (TripleIndex index : indexes) {
+			if (index.getFieldSeq().length == 0) {
+				continue;
+			}
+			switch (index.getFieldSeq()[0]) {
+			case 's':
+				supportedOrders.add(StatementOrder.S);
+				break;
+			case 'p':
+				supportedOrders.add(StatementOrder.P);
+				break;
+			case 'o':
+				supportedOrders.add(StatementOrder.O);
+				break;
+			case 'c':
+				supportedOrders.add(StatementOrder.C);
+				break;
+			default:
+				break;
+			}
+		}
+		return supportedOrders;
+	}
+
 	boolean hasTriples(boolean explicit) throws IOException {
 		TripleIndex mainIndex = indexes.getFirst();
 		return txnManager.doWith((stack, txn) -> {
@@ -493,6 +530,42 @@ class TripleStore implements Closeable {
 	private RecordIterator getTriplesUsingIndex(Txn txn, long subj, long pred, long obj, long context,
 			boolean explicit, TripleIndex index, boolean rangeSearch) throws IOException {
 		return new LmdbRecordIterator(index, rangeSearch, subj, pred, obj, context, explicit, txn);
+	}
+
+	private TripleIndex getBestIndexForOrder(StatementOrder statementOrder, long subj, long pred, long obj,
+			long context) {
+		char leadingField;
+		switch (statementOrder) {
+		case S:
+			leadingField = 's';
+			break;
+		case P:
+			leadingField = 'p';
+			break;
+		case O:
+			leadingField = 'o';
+			break;
+		case C:
+			leadingField = 'c';
+			break;
+		default:
+			return null;
+		}
+
+		TripleIndex bestIndex = null;
+		int bestScore = Integer.MIN_VALUE;
+		for (TripleIndex index : indexes) {
+			char[] fieldSeq = index.getFieldSeq();
+			if (fieldSeq.length == 0 || fieldSeq[0] != leadingField) {
+				continue;
+			}
+			int score = index.getPatternScore(subj, pred, obj, context);
+			if (bestIndex == null || score > bestScore) {
+				bestIndex = index;
+				bestScore = score;
+			}
+		}
+		return bestIndex;
 	}
 
 	/**
