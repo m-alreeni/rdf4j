@@ -539,6 +539,10 @@ final class LegacyStoreDiscovery {
 				throw new IOException("Native triple index metadata disagrees with named index databases");
 			}
 		}
+		byte[] backupBoundary = getValue(transaction, database, TripleStore.BACKUP_BOUNDARY_KEY);
+		if (backupBoundary != null) {
+			TripleStore.validateBackupBoundary(backupBoundary);
+		}
 		PointerBuffer handle = stack.mallocPointer(1);
 		E(mdb_cursor_open(transaction, database, handle));
 		long cursor = handle.get(0);
@@ -552,6 +556,7 @@ final class LegacyStoreDiscovery {
 						&& !Arrays.equals(bytes, TripleStore.NAMESPACE_SNAPSHOT_KEY)
 						&& !Arrays.equals(bytes, TripleStore.INDEX_FORMAT_KEY)
 						&& !Arrays.equals(bytes, TripleStore.INDEX_SPECS_KEY)
+						&& !Arrays.equals(bytes, TripleStore.BACKUP_BOUNDARY_KEY)
 						&& !Arrays.equals(bytes, PreparedBulkStore.GENERATION_KEY)) {
 					throw new IOException("Unrecognized namespace database metadata key: " + printablePrefix(bytes));
 				}
@@ -790,10 +795,13 @@ final class LegacyStoreDiscovery {
 		validateDescriptor(StoreProperties.TRIPLE_TERM_INDEXES_KEY, properties.getTripleTermIndexes(), terms,
 				!legacy, termManifest);
 		// Each manifest is committed with its own native indexes. A valid sidecar may lag that commit after a crash.
-		if (statementManifest || properties.getTripleIndexes() == null || properties.getTripleIndexes().isBlank()) {
+		if (properties.getTripleIndexes() == null || properties.getTripleIndexes().isBlank()
+				|| statementManifest
+						&& !TripleIndex.parseIndexSpecList(properties.getTripleIndexes()).equals(statements)) {
 			properties.setTripleIndexes(String.join(",", new TreeSet<>(statements)));
 		}
-		if (termManifest || properties.getTripleTermIndexes() == null || properties.getTripleTermIndexes().isBlank()) {
+		if (properties.getTripleTermIndexes() == null || properties.getTripleTermIndexes().isBlank()
+				|| termManifest && !TripleIndex.parseIndexSpecList(properties.getTripleTermIndexes()).equals(terms)) {
 			properties.setTripleTermIndexes(String.join(",", new TreeSet<>(terms)));
 		}
 	}

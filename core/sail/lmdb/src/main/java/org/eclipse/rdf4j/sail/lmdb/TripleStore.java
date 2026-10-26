@@ -202,7 +202,7 @@ class TripleStore implements Closeable {
 	static final byte[] INDEX_FORMAT_KEY = "triple-index-format".getBytes(StandardCharsets.US_ASCII);
 	static final byte[] INDEX_SPECS_KEY = "triple-index-specs".getBytes(StandardCharsets.US_ASCII);
 	static final int INDEX_DATABASE_VERSION = 1;
-	private static final byte[] BACKUP_BOUNDARY_KEY = "backup-logical-boundary".getBytes(StandardCharsets.US_ASCII);
+	static final byte[] BACKUP_BOUNDARY_KEY = "backup-logical-boundary".getBytes(StandardCharsets.US_ASCII);
 	private static final int MAX_INDEX_INITIALIZATION_ATTEMPTS = 4;
 	private static final Pattern MUTATION_JOURNAL_NAME = Pattern.compile(
 			"txn-replay-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.bin");
@@ -717,19 +717,26 @@ class TripleStore implements Closeable {
 			if (encoded == null) {
 				return new long[] { lastCommittedTxnId, -1L };
 			}
-			if (encoded.length != 2 * Long.BYTES) {
-				throw new IOException("Malformed LMDB logical backup boundary");
-			}
+			validateBackupBoundary(encoded);
 			ByteBuffer buffer = ByteBuffer.wrap(encoded);
 			long current = buffer.getLong();
 			long previous = buffer.getLong();
-			if (previous < 0 || current <= previous) {
-				throw new IOException("Invalid LMDB logical backup boundary");
-			}
 			return new long[] { current, previous };
 		});
 		requiredBackupTxnId = backupBoundary[0];
 		previousRequiredBackupTxnId = backupBoundary[1];
+	}
+
+	static void validateBackupBoundary(byte[] encoded) throws IOException {
+		if (encoded.length != 2 * Long.BYTES) {
+			throw new IOException("Malformed LMDB logical backup boundary");
+		}
+		ByteBuffer buffer = ByteBuffer.wrap(encoded);
+		long current = buffer.getLong();
+		long previous = buffer.getLong();
+		if (previous < 0 || current <= previous) {
+			throw new IOException("Invalid LMDB logical backup boundary");
+		}
 	}
 
 	private void initializeBackupBoundary() throws IOException {
@@ -738,6 +745,7 @@ class TripleStore implements Closeable {
 				long baseline = mdb_txn_id(writeTxn);
 				writeNamespaceDatabaseValue(stack, writeTxn, BACKUP_BOUNDARY_KEY,
 						ByteBuffer.allocate(2 * Long.BYTES).putLong(baseline).putLong(baseline - 1).array());
+				setupCommitWithoutNativeWrites = false;
 				nativeMutation = true;
 				unjournaledMutation = true;
 			}
@@ -2338,7 +2346,13 @@ class TripleStore implements Closeable {
 
 	void copyEnvironment(Path targetDir, boolean compact) throws IOException {
 		Files.createDirectories(targetDir);
-		E(mdb_env_copy2(env, targetDir.toAbsolutePath().toString(), compact ? MDB_CP_COMPACT : 0));
+		long stamp = txnManager.acquireReadBarrier();
+		try {
+			// LMDB's copy owns an internal reader that TxnManager cannot deactivate during map resizing.
+			E(mdb_env_copy2(env, targetDir.toAbsolutePath().toString(), compact ? MDB_CP_COMPACT : 0));
+		} finally {
+			txnManager.lockManager().unlockRead(stamp);
+		}
 	}
 
 	Map<String, LmdbStore.LmdbDatabaseStats> getLmdbStats() throws IOException {

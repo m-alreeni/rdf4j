@@ -2613,6 +2613,7 @@ class LmdbSailStore implements SailStore {
 	static int valueGcDrainBatchSize() {
 		return Integer.getInteger("rdf4j.lmdb.valueGc.drainBatchSize", 100_000);
 	}
+
 	private static final String TRIPLES_DIR_NAME = "triples";
 	private static final String VALUES_DIR_NAME = "values";
 
@@ -3723,7 +3724,6 @@ class LmdbSailStore implements SailStore {
 				if (explicit) {
 					sink.queueEstimatorRemove(identities[index]);
 				}
-				sink.queueBackupRemove(identities[index]);
 				Set<Long> retiredIds = mutationUnusedIds();
 				for (long id : quads[index]) {
 					if (id != 0L && !ValueIds.isInlined(id)) {
@@ -6538,17 +6538,24 @@ class LmdbSailStore implements SailStore {
 	}
 
 	long createOnlineSnapshot(Path targetDir, boolean compact, Runnable afterTransactionIdCaptured) throws IOException {
-		sinkStoreAccessLock.lock();
+		// Keep this non-replayable copy pending through growth admission, before the sink/native barriers.
+		ReadViewLease admission = mapGrowthCoordinator.registerView(null, null, null);
 		try {
-			long transactionId = getCurrentCommittedTxnId();
-			afterTransactionIdCaptured.run();
-			Files.createDirectories(targetDir);
-			tripleStore.copyEnvironment(targetDir.resolve(TRIPLES_DIR_NAME), compact);
-			valueStore.copyEnvironment(targetDir.resolve(VALUES_DIR_NAME), compact);
-			copySupplementaryStoreFiles(targetDir);
-			return transactionId;
+			sinkStoreAccessLock.lock();
+			try {
+				mapGrowthCoordinator.checkAdmission(QueryExecutionDeadline.current());
+				long transactionId = getCurrentCommittedTxnId();
+				afterTransactionIdCaptured.run();
+				Files.createDirectories(targetDir);
+				tripleStore.copyEnvironment(targetDir.resolve(TRIPLES_DIR_NAME), compact);
+				valueStore.copyEnvironment(targetDir.resolve(VALUES_DIR_NAME), compact);
+				copySupplementaryStoreFiles(targetDir);
+				return transactionId;
+			} finally {
+				sinkStoreAccessLock.unlock();
+			}
 		} finally {
-			sinkStoreAccessLock.unlock();
+			admission.release();
 		}
 	}
 

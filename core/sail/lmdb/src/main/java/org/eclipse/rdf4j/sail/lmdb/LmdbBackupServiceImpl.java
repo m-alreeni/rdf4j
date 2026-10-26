@@ -74,7 +74,6 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 	private static final String TXLOG_DIR = "txlog";
 	private static final String BACKUP_STATE_FILE = "backup.properties";
 	private static final String BACKUP_DIRECTORY_KEY = "backup-directory";
-	private static final String DEFAULT_TRIPLE_TERM_INDEXES = "spoc,cspo";
 
 	private final Path storeRoot;
 	private final LmdbSailStore backingStore;
@@ -310,7 +309,6 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 		boolean promoted = false;
 		try {
 			long txnId = backingStore.createOnlineSnapshot(snapshotDir, true, afterFullBackupTransactionIdCaptured);
-			copyStorePropertiesFile(snapshotDir);
 			String backupId = "full-" + txnId + "-" + System.currentTimeMillis();
 			Path container = parent.resolve(backupId);
 			Path artifactPath = snapshotDir;
@@ -356,19 +354,6 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 		if (normalizedBackupDir.startsWith(storeRoot)) {
 			throw new SailException("Full backup directory must not be nested inside the LMDB data directory");
 		}
-	}
-
-	private void copyStorePropertiesFile(Path snapshotDir) {
-		StoreProperties snapshotProperties = new StoreProperties(snapshotDir.toFile());
-		snapshotProperties.setVersion(String.valueOf(LmdbStore.VERSION))
-				.setTripleIndexes(config.getTripleIndexes())
-				.setTripleTermIndexes(resolveTripleTermIndexes())
-				.save();
-	}
-
-	private String resolveTripleTermIndexes() {
-		String configured = config.getTripleTermIndexes();
-		return configured == null || configured.isBlank() ? DEFAULT_TRIPLE_TERM_INDEXES : configured;
 	}
 
 	private BackupResult createIncrementalBackup(BackupRequest request) throws IOException {
