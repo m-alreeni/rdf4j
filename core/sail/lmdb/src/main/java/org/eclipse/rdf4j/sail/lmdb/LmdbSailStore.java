@@ -9696,7 +9696,13 @@ class LmdbSailStore implements SailStore {
 		}
 
 		private void queueBackupAdd(Statement st) {
-			pendingBackupRecords.add(new LmdbBackupDeltaCodec.Record(true, explicit, st));
+			try {
+				Statement captured = valueStore.withWriterCaptureContext(
+						(stack, txn) -> captureBackupStatement(st));
+				pendingBackupRecords.add(new LmdbBackupDeltaCodec.Record(true, explicit, captured));
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
 		}
 
 		private void queueBackupRemove(Statement st) {
@@ -11031,7 +11037,8 @@ class LmdbSailStore implements SailStore {
 					Consumer<long[]> removed = quad -> {
 						removeCount[0]++;
 						try {
-							Statement removedStatement = quadToStatement(quad);
+							Statement removedStatement = valueStore.withWriterCaptureContext(
+									(stack, txn) -> captureBackupStatement(quadToStatement(quad)));
 							queueBackupRemove(removedStatement);
 							if (explicit) {
 								queueEstimatorRemove(removedStatement);
@@ -11905,6 +11912,50 @@ class LmdbSailStore implements SailStore {
 			}
 		}
 		return false;
+	}
+
+	/** Resolve journal-owned copies without initializing canonical models retained by independent readers. */
+	private static Statement captureBackupStatement(Statement statement) {
+		PreparedLmdbValue.Owner owner = new PreparedLmdbValue.Owner();
+		return captureMutationStatement(SimpleValueFactory.getInstance()
+				.createStatement(
+						(Resource) captureBackupValue(statement.getSubject(), owner),
+						(IRI) captureBackupValue(statement.getPredicate(), owner),
+						captureBackupValue(statement.getObject(), owner),
+						(Resource) captureBackupValue(statement.getContext(), owner)));
+	}
+
+	private static Value captureBackupValue(Value value, PreparedLmdbValue.Owner owner) {
+		if (value instanceof LmdbValue nativeValue
+				&& nativeValue.getSemanticVersion() != LmdbValue.UNKNOWN_ID) {
+			LmdbValue.InternalIdentity identity = nativeValue.getInternalIdentity();
+			if (identity.id() != LmdbValue.UNKNOWN_ID) {
+				Value payload = nativeValue.copyInitializedValue(child -> captureBackupValue(child, owner));
+				if (payload != null && nativeValue instanceof PreparedLmdbValue.Prepared) {
+					return captureBackupValue(payload, owner);
+				}
+				// Decode an owned model, including its children, rather than initializing a shared cold shell.
+				return PreparedLmdbValue.create(new PreparedLmdbValue.State(owner, value.getType(), identity, payload));
+			}
+		}
+		if (value instanceof TripleTerm triple) {
+			return SimpleValueFactory.getInstance()
+					.createTripleTerm(
+							(Resource) captureBackupValue(triple.getSubject(), owner),
+							(IRI) captureBackupValue(triple.getPredicate(), owner),
+							captureBackupValue(triple.getObject(), owner));
+		}
+		if (value instanceof Literal literal) {
+			SimpleValueFactory factory = SimpleValueFactory.getInstance();
+			Optional<String> language = literal.getLanguage();
+			if (language.isPresent()) {
+				Literal.BaseDirection direction = literal.getBaseDirection();
+				return direction == null ? factory.createLiteral(literal.getLabel(), language.get())
+						: factory.createLiteral(literal.getLabel(), language.get(), direction);
+			}
+			return factory.createLiteral(literal.getLabel(), (IRI) captureBackupValue(literal.getDatatype(), owner));
+		}
+		return value;
 	}
 
 	/** Own each deferred RDF identity once; no mutable caller value or native association enters retained work. */

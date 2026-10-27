@@ -231,6 +231,19 @@ final class LegacyStoreDiscovery {
 		validateDescriptor("native triple index", descriptor, statementIndexes, true, false);
 		long namespaceEntries = 4L;
 		try (MemoryStack lookup = MemoryStack.stackPush()) {
+			MDBVal key = MDBVal.calloc(lookup).mv_data(lookup.bytes(TripleStore.BACKUP_BOUNDARY_KEY));
+			MDBVal value = MDBVal.calloc(lookup);
+			int result = mdb_get(triplesTxn, namespaces, key, value);
+			if (result != MDB_NOTFOUND) {
+				E(result);
+				if (value.mv_size() != 2L * Long.BYTES) {
+					throw new IOException("Malformed LMDB logical backup boundary");
+				}
+				TripleStore.validateBackupBoundary(copy(value.mv_data()));
+				namespaceEntries++;
+			}
+		}
+		try (MemoryStack lookup = MemoryStack.stackPush()) {
 			MDBVal key = MDBVal.calloc(lookup).mv_data(lookup.bytes(PreparedBulkStore.GENERATION_KEY));
 			MDBVal value = MDBVal.calloc(lookup);
 			int result = mdb_get(triplesTxn, namespaces, key, value);

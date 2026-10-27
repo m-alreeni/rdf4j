@@ -1119,6 +1119,7 @@ public class ValueStore extends AbstractValueFactory implements BNodeIdResolver,
 		ValueStoreRevision.Lazy borrowedRevision;
 		boolean hasReadLock;
 		boolean retainedDictionaryDecode;
+		boolean writerCapture;
 		// The thread's LWJGL stack, looked up once per borrowed context and reused by nested native reads.
 		MemoryStack stack;
 	}
@@ -3985,11 +3986,17 @@ public class ValueStore extends AbstractValueFactory implements BNodeIdResolver,
 	}
 
 	private ValueResolutionScope openValueResolutionScope(boolean oldestProtected) {
+		return openValueResolutionScope(oldestProtected, false);
+	}
+
+	private ValueResolutionScope openValueResolutionScope(boolean oldestProtected, boolean admittedWriter) {
 		QueryExecutionDeadline deadline = QueryExecutionDeadline.current();
-		try {
-			acquireAssociationGate(deadline);
-		} catch (IOException failure) {
-			throw new SailException(failure);
+		if (!admittedWriter) {
+			try {
+				acquireAssociationGate(deadline);
+			} catch (IOException failure) {
+				throw new SailException(failure);
+			}
 		}
 		try {
 			// Writer publication uses this same gate-before-admission order.
@@ -4021,7 +4028,9 @@ public class ValueStore extends AbstractValueFactory implements BNodeIdResolver,
 				}
 			}
 		} finally {
-			associationGate.unlock();
+			if (!admittedWriter) {
+				associationGate.unlock();
+			}
 		}
 	}
 
@@ -4274,6 +4283,12 @@ public class ValueStore extends AbstractValueFactory implements BNodeIdResolver,
 			throws IOException {
 		if (requested != null) {
 			ensureAssociationReadable(requested);
+		}
+		long borrowedWriter = readContext.get().borrowedTxn;
+		if (readContext.get().writerCapture && borrowedWriter != 0 && borrowedWriter == writeTxn) {
+			// Serialized writer callbacks already own this native prefix. Growth may hold associationGate
+			// while waiting for that prefix to drain, so do not reacquire producer-side admission here.
+			return LmdbUtil.readTransaction(env, borrowedWriter, transaction);
 		}
 		if (isWriteTransactionOwner()) {
 			// The native writer can be consumed by commit, rollback, clear or close on another thread. Keep its
@@ -13799,6 +13814,22 @@ public class ValueStore extends AbstractValueFactory implements BNodeIdResolver,
 	/** Mutating APIs already admitted to the serialized writer must also resolve its uncommitted dependencies. */
 	private <T> T withWriterLookupContext(Transaction<T> transaction) throws IOException {
 		return withBorrowedReadContext(writeTxn, currentReadRevision(LmdbValue.UNKNOWN_ID), false, transaction);
+	}
+
+	<T> T withWriterCaptureContext(Transaction<T> transaction) throws IOException {
+		return withWriterLookupContext((stack, txn) -> {
+			ReadContext context = readContext.get();
+			boolean previousCapture = context.writerCapture;
+			context.writerCapture = true;
+			try {
+				try (ValueResolutionScope scope = openValueResolutionScope(false, true);
+						SailClosable activation = scope.activate()) {
+					return transaction.exec(stack, txn);
+				}
+			} finally {
+				context.writerCapture = previousCapture;
+			}
+		});
 	}
 
 	private long getTransactionValueId(Value value) {
