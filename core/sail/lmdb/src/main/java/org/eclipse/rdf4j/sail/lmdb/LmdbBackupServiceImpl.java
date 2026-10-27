@@ -101,7 +101,8 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 	private volatile boolean closed;
 	private Long failedPublicationTxnId;
 
-	LmdbBackupServiceImpl(LmdbStore store, LmdbSailStore backingStore, LmdbStoreConfig config) {
+	LmdbBackupServiceImpl(LmdbStore store, LmdbSailStore backingStore, LmdbStoreConfig config,
+			PostCommitBackupPublisher postCommitPublisher) {
 		this.storeRoot = store.getDataDir().toPath().toAbsolutePath().normalize();
 		this.backingStore = backingStore;
 		this.config = config;
@@ -112,18 +113,22 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 		} catch (IOException e) {
 			throw new SailException("Unable to recover LMDB backup publication baseline", e);
 		}
-		this.backingStore.setCommitListener(new LmdbSailStore.CommitListener() {
-			@Override
-			public void onCommit(long transactionId, long previousRequiredTxn, List<Record> records) {
-				LmdbBackupServiceImpl.this.onCommit(transactionId, previousRequiredTxn, records);
-			}
+		// If post-commit publisher is provided, the backup service will set itself as the publisher's backup service
+		// and the publisher will be used as the commit listener. Otherwise, use direct listener.
+		if (postCommitPublisher == null) {
+			backingStore.setCommitListener(new LmdbSailStore.CommitListener() {
+				@Override
+				public void onCommit(long transactionId, long previousRequiredTxn, List<Record> records) {
+					LmdbBackupServiceImpl.this.onCommit(transactionId, previousRequiredTxn, records);
+				}
 
-			@Override
-			public void onCommitFailure(long transactionId, long previousRequiredTxn, List<Record> records,
-					Throwable error) {
-				LmdbBackupServiceImpl.this.onCommitFailure(transactionId, error);
-			}
-		});
+				@Override
+				public void onCommitFailure(long transactionId, long previousRequiredTxn, List<Record> records,
+						Throwable error) {
+					LmdbBackupServiceImpl.this.onCommitFailure(transactionId, error);
+				}
+			});
+		}
 	}
 
 	void setAfterFullBackupTransactionIdCaptured(Runnable callback) {
@@ -408,7 +413,7 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 		}
 	}
 
-	private void onCommit(long transactionId, long previousRequiredTxn, List<Record> records) {
+	void onCommit(long transactionId, long previousRequiredTxn, List<Record> records) {
 		if (records.isEmpty()) {
 			return;
 		}
@@ -460,7 +465,7 @@ final class LmdbBackupServiceImpl implements SailBackupService {
 		}
 	}
 
-	private void onCommitFailure(long transactionId, Throwable error) {
+	void onCommitFailure(long transactionId, Throwable error) {
 		txLogPublicationLock.lock();
 		try {
 			markPublicationFailure(transactionId);

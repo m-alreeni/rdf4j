@@ -5868,13 +5868,13 @@ public class ValueStore extends AbstractValueFactory implements BNodeIdResolver,
 			return withValueReadTransaction(
 					isWriteTransactionOwner() ? valueRevision : null,
 					(stack, txn) -> finishNakedLookup(
-							getValue(id, positionedRevision(readContext.get().borrowedRevision, positionMask))));
+							getValue(id, valueRevision)));
 		}
 		if (cached != null || ValueIds.isInlined(id)) {
 			return cached == null ? getValue(id, valueRevision) : cached;
 		}
 		return withValueReadTransaction(isWriteTransactionOwner() ? valueRevision : null,
-				(stack, txn) -> getValue(id, positionedRevision(readContext.get().borrowedRevision, positionMask)));
+				(stack, txn) -> getValue(id, valueRevision));
 	}
 
 	private LmdbValue getValue(long id, ValueStoreRevision valueRevision) throws IOException {
